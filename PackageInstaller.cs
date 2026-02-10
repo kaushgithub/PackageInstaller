@@ -1,172 +1,138 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace PackageDependencyInstaller
 {
+    /// <summary>
+    /// A utility to determine installation order for packages based on dependencies.
+    /// Detects cycles and prints an installation order respecting dependencies.
+    /// </summary>
     public class PackageInstaller
     {
+        /// <summary>
+        /// Returns a comma-separated string of packages in installable order.
+        /// Throws an exception if cycles are detected.
+        /// </summary>
+        /// <param name="inputDependencies">Array of strings in the format "Package:Dependency"</param>
+        /// <returns>Comma-separated installation order</returns>
         public string PrintDependencies(string[] inputDependencies)
         {
-            if (inputDependencies == null || inputDependencies.Count() < 1)
-                throw new ArgumentNullException("inputDependencies");
-            List<string> dependentOn = new List<string>(); //Holds strings which are parent
-            Dictionary<string, HashSet<string>> dependencyRelation = new Dictionary<string, HashSet<string>>(); //build a dictionary of string with dependents 
-            List<string> noDependents = null; //Hold strings which do not have any dependents
-            foreach (string inputDependency in inputDependencies)
+            if (inputDependencies == null || inputDependencies.Length < 1)
+                throw new ArgumentNullException(nameof(inputDependencies));
+
+            var dependentOn = new List<string>(); // Holds packages that are parents
+            var dependencyRelation = new Dictionary<string, HashSet<string>>(); // Parent -> set of dependents
+            List<string> noDependents = new List<string>(); // Packages with no dependencies
+
+            // Build dependency graph
+            foreach (var inputDependency in inputDependencies)
             {
-                var inputs = inputDependency.Split(':');
-                if (inputs.Count() < 2)
-                    throw new ArgumentException("Input string does not have a :");
-                if (inputs.Count() > 0)
+                var parts = inputDependency.Split(':');
+                if (parts.Length != 2)
+                    throw new ArgumentException($"Invalid input format: {inputDependency}");
+
+                string dependent = parts[0].Trim();
+                string dependsOn = parts[1].Trim();
+
+                if (!string.IsNullOrEmpty(dependsOn))
                 {
-                    string inputDependentOn = inputs[1].Trim();
-                    string inputDependent = inputs[0].Trim();
-                    if (!string.IsNullOrWhiteSpace(inputDependentOn))
-                    {
-                        FindCycles(dependencyRelation, inputDependent, inputDependentOn);
-                    }
-                    if (inputs.Count() == 2 && (!string.IsNullOrWhiteSpace(inputDependentOn)))
-                    {
-                        if (dependencyRelation.ContainsKey(inputDependentOn))
-                        {
-                            HashSet<string> temp = dependencyRelation[inputDependentOn];
-                            temp.Add(inputDependent);
-                            dependencyRelation[inputDependentOn] = temp;
-                        }
-                        else
-                        {
-                            HashSet<string> temp = new HashSet<string>();
-                            temp.Add(inputDependent);
-                            dependencyRelation.Add(inputDependentOn, temp);
-                        }
-                        dependentOn = WalkThroughDependentOnListAndAddCurrentDependentOn(dependentOn, inputDependentOn, inputDependent);
-                    }
-                    else if ((inputs.Count() == 2 && string.IsNullOrWhiteSpace(inputDependentOn)))
-                    {
-                        if (noDependents == null)
-                        {
-                            noDependents = new List<string>();
-                        }
-                        noDependents.Add(inputDependent);
-                    }
+                    // Check cycles before adding
+                    CheckCycles(dependencyRelation, dependent, dependsOn);
+
+                    // Add dependent to parent's list
+                    if (!dependencyRelation.ContainsKey(dependsOn))
+                        dependencyRelation[dependsOn] = new HashSet<string>();
+
+                    dependencyRelation[dependsOn].Add(dependent);
+
+                    // Maintain ordering in dependentOn list
+                    dependentOn = AddDependencyInOrder(dependentOn, dependsOn, dependent);
+                }
+                else
+                {
+                    // No dependencies
+                    noDependents.Add(dependent);
                 }
             }
 
-            //print the dependencies and return
-            HashSet<string> visited = new HashSet<string>();
-            StringBuilder retval = new StringBuilder();
-            bool firstDependency = false;
-            if (noDependents != null && noDependents.Count > 0)
+            // Build the final install order
+            var visited = new HashSet<string>();
+            var result = new StringBuilder();
+            bool first = true;
+
+            void AppendPackage(string pkg)
             {
-                foreach (string installerPackage in noDependents)
+                if (!visited.Contains(pkg))
                 {
-                    if (!visited.Contains(installerPackage))
-                    {
-                        if (!firstDependency)
-                        {
-                            retval.Append(installerPackage);
-                            firstDependency = true;
-                        }
-                        else
-                        {
-                            retval.Append( ", " + installerPackage);
-                        }
-                        visited.Add(installerPackage);
-                    }
+                    if (!first) result.Append(", ");
+                    result.Append(pkg);
+                    first = false;
+                    visited.Add(pkg);
                 }
             }
-            foreach (string installerPackage in dependentOn)
+
+            // Add packages with no dependencies first
+            foreach (var pkg in noDependents)
+                AppendPackage(pkg);
+
+            // Add dependent packages respecting order
+            foreach (var pkg in dependentOn)
             {
-                if (!visited.Contains(installerPackage))
+                AppendPackage(pkg);
+
+                if (dependencyRelation.ContainsKey(pkg))
                 {
-                    if (!firstDependency)
-                    {
-                        retval.Append(installerPackage);
-                        firstDependency = true;
-                    }
-                    else
-                    {
-                        retval.Append(", " + installerPackage);
-                    }
-                    visited.Add(installerPackage);
-                }
-                HashSet<string> temp = dependencyRelation[installerPackage];
-                foreach (var dependent in temp)
-                {
-                    if (!visited.Contains(dependent))
-                    {
-                        if (!firstDependency)
-                        {
-                            retval.Append(dependent);
-                            firstDependency = true;
-                        }
-                        else
-                        {
-                            retval.Append(", " +  dependent);
-                        }
-                        visited.Add(dependent);
-                    }
+                    foreach (var dep in dependencyRelation[pkg])
+                        AppendPackage(dep);
                 }
             }
-            return retval.ToString();
+
+            return result.ToString();
         }
 
-        //This method walks through the dependenton list and reorders the list based on dependency and adds the addDependentOn at the correct position
-        private List<string> WalkThroughDependentOnListAndAddCurrentDependentOn(List<string> dependentOn, string addDependentOn, string dependent)
+        /// <summary>
+        /// Adds a package to the dependentOn list in the correct order based on dependencies.
+        /// </summary>
+        private List<string> AddDependencyInOrder(List<string> dependentOn, string parent, string child)
         {
-            if (dependentOn.Contains(addDependentOn))
-                return dependentOn; //if it is already there, just return
-            if (dependentOn.Contains(dependent))
+            if (dependentOn.Contains(parent))
+                return dependentOn;
+
+            if (dependentOn.Contains(child))
             {
-                //reconstruct the list
-                List<string> tempList = new List<string>(dependentOn.Count + 1);
-                tempList.Add(addDependentOn); //add before 
-                tempList.AddRange(dependentOn);
-                dependentOn = tempList;
-                return tempList;
+                // Insert parent before child
+                var newList = new List<string> { parent };
+                newList.AddRange(dependentOn);
+                return newList;
             }
-            dependentOn.Add(addDependentOn);  //or add at the end of list
+
+            dependentOn.Add(parent);
             return dependentOn;
         }
 
-        private void FindCycles(Dictionary<string, HashSet<string>> dependencyRelation, string dependent, string dependentOn)
+        /// <summary>
+        /// Detects cycles in the dependency graph.
+        /// Throws ArgumentException if a cycle is found.
+        /// </summary>
+        private void CheckCycles(Dictionary<string, HashSet<string>> dependencyRelation, string dependent, string dependsOn)
         {
-            if (dependencyRelation.ContainsKey(dependent))
-            {
-                //check for cycles
-                HashSet<string> temp = new HashSet<string>(dependencyRelation[dependent].ToList());
-                List<string> tempList = temp.ToList();
-                if (temp.Contains(dependentOn))
-                    throw new ArgumentException("Dependencies contains cycles");
-                while (true)
-                {
-                    if (temp != null && temp.Count > 0)
-                    {
-                        if (temp.Contains(dependentOn))
-                        {
-                            throw new ArgumentException("Dependencies contains cycles");
-                        }
-                        tempList = temp.ToList();
-                        temp.Clear();
-                        foreach (var str in tempList)
-                        {
-                            if (dependencyRelation.ContainsKey(str))
-                            {
-                                foreach (var strdependecy in dependencyRelation[str].ToList())
-                                {
-                                    temp.Add(strdependecy);
-                                }
-                            }
+            if (!dependencyRelation.ContainsKey(dependent))
+                return;
 
-                        }
-                    }
-                    else
-                    {
-                        return;
-                    }
+            var toCheck = new Queue<string>(dependencyRelation[dependent]);
+
+            while (toCheck.Count > 0)
+            {
+                var current = toCheck.Dequeue();
+                if (current == dependsOn)
+                    throw new ArgumentException("Dependency graph contains a cycle");
+
+                if (dependencyRelation.ContainsKey(current))
+                {
+                    foreach (var child in dependencyRelation[current])
+                        toCheck.Enqueue(child);
                 }
             }
         }
